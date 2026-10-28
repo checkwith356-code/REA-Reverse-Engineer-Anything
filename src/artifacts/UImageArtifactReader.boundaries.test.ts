@@ -1,10 +1,12 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buffer } from "node:stream/consumers";
+import { finished } from "node:stream/promises";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
 import { createDeferred } from "../../tests/fixtures/binarySession.js";
+import { awaitAcknowledgement } from "../../tests/fixtures/lifecycleAcknowledgement.js";
 import { openRegularFile } from "../filesystem/RegularFile.js";
 import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
 import { UImageArtifactReader } from "./UImageArtifactReader.js";
@@ -141,6 +143,32 @@ it("does not complete paused inventory after its reader closes", async () => {
   }
 });
 
+it.each(["cancel", "close"] as const)(
+  "retires fully buffered, unconsumed member bytes on %s",
+  async (action) => {
+    const reader = new UImageArtifactReader(await fixture(buildUImage()));
+    const controller = new AbortController();
+    const reason = new Error("cancel buffered member");
+    try {
+      const [entry] = await entries(reader);
+      const stream = await reader.open(entry!, controller.signal);
+      await finished(stream, { readable: false, cleanup: true });
+      await setImmediate();
+      expect(stream.readableLength).toBeGreaterThan(0);
+      if (action === "cancel") controller.abort(reason);
+      else await reader.close();
+      await expect(buffer(stream)).rejects.toMatchObject(
+        action === "cancel"
+          ? { reason: "cancelled", cause: reason }
+          : { reason: "unavailable" },
+      );
+      expect(stream.destroyed).toBe(true);
+    } finally {
+      await reader.close();
+    }
+  },
+);
+
 it("joins a member's outstanding positional read before descriptor closure", async () => {
   const path = await fixture(buildUImage());
   const admitted = await openRegularFile(path, { symlinks: "reject" });
@@ -148,20 +176,28 @@ it("joins a member's outstanding positional read before descriptor closure", asy
   const reached = createDeferred<void>(),
     release = createDeferred<void>();
   const nativeRead = admitted.handle.read.bind(admitted.handle);
-  const [entry] = await entries(reader);
-  const reads = vi.spyOn(admitted.handle, "read").mockImplementation((async (
-    ...args: unknown[]
-  ) => {
-    reached.resolve();
-    await release.promise;
-    return Reflect.apply(nativeRead, admitted.handle, args);
-  }) as typeof admitted.handle.read);
+  const reads = vi.spyOn(admitted.handle, "read");
+  let outcome: Promise<unknown> | undefined;
+  let closing: Promise<void> | undefined;
   try {
+    const [entry] = await entries(reader);
+    reads.mockImplementation((async (...args: unknown[]) => {
+      reached.resolve();
+      await release.promise;
+      return Reflect.apply(nativeRead, admitted.handle, args);
+    }) as typeof admitted.handle.read);
     const stream = await reader.open(entry!);
-    stream.read(0);
-    await reached.promise;
+    outcome = buffer(stream).then(
+      () => ({ ok: true }),
+      (cause: unknown) => ({ ok: false, cause }),
+    );
+    await awaitAcknowledgement(
+      reached.promise,
+      outcome,
+      "member positional read",
+    );
     let closed = false;
-    const closing = reader.close().then(() => {
+    closing = reader.close().then(() => {
       closed = true;
     });
     await setImmediate();
@@ -171,6 +207,8 @@ it("joins a member's outstanding positional read before descriptor closure", asy
     expect(stream.closed).toBe(true);
   } finally {
     release.resolve();
+    await outcome;
+    await closing;
     await reader.close();
     reads.mockRestore();
     await admitted.handle.close();
@@ -208,35 +246,55 @@ it.each(["cancel", "close"] as const)(
     const reached = createDeferred<void>(),
       release = createDeferred<void>();
     const nativeStat = admitted.handle.stat.bind(admitted.handle);
-    const [entry] = await entries(reader);
-    let statCount = 0;
-    const stats = vi.spyOn(admitted.handle, "stat").mockImplementation((async (
-      ...args: unknown[]
-    ) => {
-      const result = await Reflect.apply(nativeStat, admitted.handle, args);
-      if (++statCount === 2) {
-        reached.resolve();
-        await release.promise;
-      }
-      return result;
-    }) as typeof admitted.handle.stat);
+    const nativeRead = admitted.handle.read.bind(admitted.handle);
+    const reads = vi.spyOn(admitted.handle, "read");
+    const stats = vi.spyOn(admitted.handle, "stat");
     const controller = new AbortController(),
       reason = new Error("cancel final validation");
+    let outcome: Promise<unknown> | undefined;
+    let closing: Promise<void> | undefined;
     try {
+      const [entry] = await entries(reader);
+      const memberEnd = BigInt(entry!.byteOffset! + entry!.declaredSize!);
+      let memberReadComplete = false;
+      reads.mockImplementation((async (...args: unknown[]) => {
+        const result = (await Reflect.apply(
+          nativeRead,
+          admitted.handle,
+          args,
+        )) as {
+          bytesRead: number;
+          buffer: Buffer;
+        };
+        if (typeof args[3] === "bigint")
+          memberReadComplete = args[3] + BigInt(result.bytesRead) === memberEnd;
+        return result;
+      }) as typeof admitted.handle.read);
+      stats.mockImplementation((async (...args: unknown[]) => {
+        const result = await Reflect.apply(nativeStat, admitted.handle, args);
+        if (memberReadComplete) {
+          memberReadComplete = false;
+          reached.resolve();
+          await release.promise;
+        }
+        return result;
+      }) as typeof admitted.handle.stat);
       const stream = await reader.open(entry!, controller.signal);
-      const outcome = buffer(stream).then(
+      outcome = buffer(stream).then(
         () => ({ ok: true }) as const,
         (cause: unknown) => ({ ok: false, cause }) as const,
       );
-      await reached.promise;
+      await awaitAcknowledgement(
+        reached.promise,
+        outcome,
+        "post-read freshness validation",
+      );
       let closed = false;
       if (action === "cancel") controller.abort(reason);
-      const closing =
-        action === "close"
-          ? reader.close().then(() => {
-              closed = true;
-            })
-          : undefined;
+      else
+        closing = reader.close().then(() => {
+          closed = true;
+        });
       await setImmediate();
       expect(closed).toBe(false);
       release.resolve();
@@ -250,8 +308,11 @@ it.each(["cancel", "close"] as const)(
       await closing;
     } finally {
       release.resolve();
+      await outcome;
+      await closing;
       await reader.close();
       stats.mockRestore();
+      reads.mockRestore();
       await admitted.handle.close();
     }
   },

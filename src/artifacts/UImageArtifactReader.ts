@@ -128,16 +128,33 @@ export class UImageArtifactReader implements ArtifactReader {
       const output = this.#memberStream(stored, signal);
       output.on("error", () => undefined);
       this.#streams.add(output);
+      const onAbort = (): void => {
+        output.destroy(
+          new ArtifactReaderFailure("cancelled", "uImage read cancelled", {
+            cause: signal?.reason,
+          }),
+        );
+      };
+      const retired = new Promise<void>((resolve) => {
+        output.once("close", () => {
+          this.#streams.delete(output);
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        });
+      });
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
       void this.#scope
-        .run(
-          () =>
-            new Promise<void>((resolve) => {
-              pipeline(source, output, () => {
-                this.#streams.delete(output);
-                resolve();
-              });
-            }),
-        )
+        .run(async () => {
+          // Writable completion can leave readable bytes buffered. Retain both
+          // producer I/O and the caller's stream until consumption or closure.
+          await Promise.all([
+            new Promise<void>((resolve) =>
+              pipeline(source, output, () => resolve()),
+            ),
+            retired,
+          ]);
+        })
         .catch((cause: unknown) =>
           output.destroy(
             cause instanceof Error
