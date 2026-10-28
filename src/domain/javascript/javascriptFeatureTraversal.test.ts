@@ -85,7 +85,7 @@ const ids = (nodes: readonly ApplicationNode[]): string[] =>
   nodes.map(({ node_id: id }) => id).sort();
 
 describe("traverseApplicationFeature", () => {
-  it("returns the union of incoming and outgoing closures for both", () => {
+  it("does not enter a shared container's other children for both", () => {
     const both = traverseApplicationFeature(graph, [firstKey.node_id], "both");
     const incoming = traverseApplicationFeature(
       graph,
@@ -126,21 +126,70 @@ describe("traverseApplicationFeature", () => {
     expect(trace.paths.map(({ end_node_id: id }) => id)).toEqual([]);
   });
 
-  it("builds each path from one direction only", () => {
+  it("follows a feature across relationships that point at it from both sides", () => {
+    // An IPC feature: the preload asset invokes the channel that the handler
+    // handles, and the main module loads the preload and requires a helper.
+    // Reaching the modules needs both edge directions; the shared root must
+    // not lead into the unrelated asset.
+    const preloadAsset = node("javascript-asset", "preload.js");
+    const preloadModule = node("javascript-module", "preload.js#module");
+    const mainAsset = node("javascript-asset", "main.js");
+    const mainModule = node("javascript-module", "main.js#module");
+    const helperModule = node("javascript-module", "csv.js#module");
+    const channel = node("ipc-channel", "notes-export");
+    const handler = node("ipc-handler", "notes-export-handler");
+    const unrelatedAsset = node("javascript-asset", "unrelated.js");
+    const unrelatedModule = node("javascript-module", "unrelated.js#module");
+    const ipcGraph = createJavaScriptApplicationGraph({
+      schema: "JavaScriptApplicationGraph",
+      root_node_ids: [root.node_id],
+      nodes: [
+        root,
+        preloadAsset,
+        preloadModule,
+        mainAsset,
+        mainModule,
+        helperModule,
+        channel,
+        handler,
+        unrelatedAsset,
+        unrelatedModule,
+      ],
+      edges: [
+        edge(root, preloadAsset, "contains"),
+        edge(root, mainAsset, "contains"),
+        edge(root, unrelatedAsset, "contains"),
+        edge(preloadAsset, preloadModule, "contains"),
+        edge(preloadAsset, channel, "invokes"),
+        edge(handler, channel, "handles"),
+        edge(mainAsset, handler, "contains"),
+        edge(mainAsset, mainModule, "contains"),
+        edge(mainModule, preloadAsset, "loads"),
+        edge(mainModule, helperModule, "imports"),
+        edge(unrelatedAsset, unrelatedModule, "contains"),
+      ],
+      coverage: completeCoverage,
+      limitations: [],
+    });
+
     const traversal = traverseApplicationFeature(
-      graph,
-      [secondModule.node_id],
+      ipcGraph,
+      [channel.node_id],
       "both",
     );
-    const [outgoing, incoming] = traversal.predecessors;
 
-    expect(outgoing?.get(endpoint.node_id)?.previousNodeId).toBe(
-      secondModule.node_id,
+    expect(ids(traversal.nodes)).toEqual(
+      ids([
+        channel,
+        preloadAsset,
+        preloadModule,
+        handler,
+        mainAsset,
+        mainModule,
+        helperModule,
+        root,
+      ]),
     );
-    expect(incoming?.get(root.node_id)?.previousNodeId).toBe(
-      secondAsset.node_id,
-    );
-    expect(ids(traversal.nodes)).not.toContain(firstModule.node_id);
   });
 
   it("returns complete one-direction paths to terminals on both sides", () => {
