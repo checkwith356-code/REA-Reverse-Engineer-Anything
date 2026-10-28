@@ -330,9 +330,42 @@ const probesFor = (
           },
         ]
       : [];
+  if (format === "fit") return fitProbes(inventory);
   return format === "directory"
     ? directoryProbes(inventory)
     : probesForFormat(format);
+};
+
+const fitProbes = (
+  inventory: ArtifactInventoryResult,
+): ArtifactInspectionResult["next_probes"] => {
+  const images = inventory.occurrences.flatMap((row) =>
+    row.format_metadata?.kind === "fit-image" ? [row.format_metadata] : [],
+  );
+  return [
+    ...(images.some((image) => image.type === "flat_dt")
+      ? [
+          {
+            operation: "inspect_devicetree",
+            rationale:
+              "Extract images with extract_artifact, then inspect flat_dt images with inspect_devicetree.",
+            authority: "artifact-bytes" as const,
+          },
+        ]
+      : []),
+    ...(images.some(
+      (image) => image.compression === "none" && image.load !== null,
+    )
+      ? [
+          {
+            operation: "open_binary",
+            rationale:
+              "Extract images with extract_artifact, then open an uncompressed image with open_binary format raw-binary, an architecture matching its declared arch, and entry_point set to its declared load address (raw-binary maps file offset 0 at entry_point).",
+            authority: "native-analysis-provider" as const,
+          },
+        ]
+      : []),
+  ];
 };
 
 // An application bundle directory is only a container, so its probes follow

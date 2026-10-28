@@ -589,6 +589,7 @@ const requireExtractableFormat = async (
     format !== "unityfs" &&
     format !== "intel-hex" &&
     format !== "srec" &&
+    format !== "fit" &&
     format !== "mach-o-universal" &&
     !isZipPackageFormat(format)
   ) {

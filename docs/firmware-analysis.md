@@ -300,3 +300,11 @@ file for its address regions, declared start address and record facts, then
 `extract-artifact` / `extract_artifact` for one raw file per region. Decoding is
 portable and requires no external tool. See
 [Intel HEX and S-record images](hex-records.md).
+
+## Inspect U-Boot FIT images
+
+Use `inspect-artifact` / `inspect_artifact` on a U-Boot FIT (`.itb`) for its
+images, declared load and entry addresses, configurations and verified hashes,
+then `extract-artifact` / `extract_artifact` for one raw file per image.
+Decoding is portable and requires no external tool. See
+[U-Boot FIT images](fit-images.md).

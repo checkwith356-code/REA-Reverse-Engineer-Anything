@@ -281,6 +281,16 @@ rea extract-artifact ./firmware.hex --json
 See [Intel HEX and S-record images](hex-records.md) for recognition, region
 names, metadata and limits.
 
+Inventory and extract U-Boot FIT images:
+
+```sh
+rea inspect-artifact ./boot.itb --json
+rea extract-artifact ./boot.itb --json
+```
+
+See [U-Boot FIT images](fit-images.md) for recognition, data sources, hashes
+and limits.
+
 Inspect local model declarations without loading weights:
 
 ```bash

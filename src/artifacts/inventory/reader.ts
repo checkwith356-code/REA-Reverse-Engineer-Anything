@@ -79,6 +79,11 @@ export const inventoryCoverage = (
               "Intel HEX/S-record inventory decodes data records into address-contiguous regions. It does not establish CPU, byte order, memory map, or that a declared start address is executable; gaps are unwritten, not zero.",
             ]
           : []),
+        ...(reader.format === "fit"
+          ? [
+              "FIT inventory reports each /images node's stored bytes and its declared type, architecture, OS, compression, load and entry. Image data is not decompressed or decrypted, signatures are not verified, nothing is executed, and load and entry addresses are declarations.",
+            ]
+          : []),
         ...traversal.limitations,
       ],
     };
@@ -105,7 +110,8 @@ export const inventoryCoverage = (
     format === "unityfs" ||
     format === "node-sea" ||
     format === "intel-hex" ||
-    format === "srec"
+    format === "srec" ||
+    format === "fit"
   )
     return {
       coverage: { scope: "container-entries", status: "unknown" },

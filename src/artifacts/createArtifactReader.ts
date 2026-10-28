@@ -6,6 +6,7 @@ import { AsarArtifactReader } from "./AsarArtifactReader.js";
 import type { ArtifactReader } from "./ArtifactReader.js";
 import { HexRecordArtifactReader } from "./HexRecordArtifactReader.js";
 import { DirectoryArtifactReader } from "./DirectoryArtifactReader.js";
+import { FitArtifactReader } from "./FitArtifactReader.js";
 import { GodotPckArtifactReader } from "./GodotPckArtifactReader.js";
 import { MachOSliceArtifactReader } from "./MachOSliceArtifactReader.js";
 import { NativeDmgArtifactReader } from "./NativeDmgArtifactReader.js";
@@ -30,6 +31,7 @@ export type ArtifactReaderFormat =
   | "unityfs"
   | "intel-hex"
   | "srec"
+  | "fit"
   | "mach-o-universal"
   | "dmg"
   | ZipPackageFormat;
@@ -115,6 +117,8 @@ export function createArtifactReader(
     case "intel-hex":
     case "srec":
       return new HexRecordArtifactReader(path, format, rootSource);
+    case "fit":
+      return new FitArtifactReader(path, rootSource);
     case "mach-o-universal":
       return new MachOSliceArtifactReader(
         path,

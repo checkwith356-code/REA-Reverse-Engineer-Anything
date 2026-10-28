@@ -262,7 +262,8 @@ export type BinaryTarget =
           | "dmg"
           | "pkg"
           | "intel-hex"
-          | "srec";
+          | "srec"
+          | "fit";
       })
   | (BinaryTargetIdentity &
       NonExecutableMetadata & {
