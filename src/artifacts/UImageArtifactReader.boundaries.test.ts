@@ -237,7 +237,7 @@ it("retains failed descriptor cleanup for retry", async () => {
   }
 });
 
-it.each(["cancel", "close"] as const)(
+it.each(["cancel", "cancel-with-validation-error", "close"] as const)(
   "joins final freshness validation during %s",
   async (action) => {
     const path = await fixture(buildUImage());
@@ -251,6 +251,7 @@ it.each(["cancel", "close"] as const)(
     const stats = vi.spyOn(admitted.handle, "stat");
     const controller = new AbortController(),
       reason = new Error("cancel final validation");
+    const validationFailure = new Error("final descriptor stat failed");
     let outcome: Promise<unknown> | undefined;
     let closing: Promise<void> | undefined;
     try {
@@ -276,6 +277,8 @@ it.each(["cancel", "close"] as const)(
           memberReadComplete = false;
           reached.resolve();
           await release.promise;
+          if (action === "cancel-with-validation-error")
+            throw validationFailure;
         }
         return result;
       }) as typeof admitted.handle.stat);
@@ -290,7 +293,7 @@ it.each(["cancel", "close"] as const)(
         "post-read freshness validation",
       );
       let closed = false;
-      if (action === "cancel") controller.abort(reason);
+      if (action !== "close") controller.abort(reason);
       else
         closing = reader.close().then(() => {
           closed = true;
@@ -301,9 +304,11 @@ it.each(["cancel", "close"] as const)(
       expect(await outcome).toMatchObject({
         ok: false,
         cause:
-          action === "cancel"
-            ? { reason: "cancelled", cause: reason }
-            : { reason: "unavailable" },
+          action === "cancel-with-validation-error"
+            ? validationFailure
+            : action === "cancel"
+              ? { reason: "cancelled", cause: reason }
+              : { reason: "unavailable" },
       });
       await closing;
     } finally {
